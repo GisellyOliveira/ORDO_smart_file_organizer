@@ -1,6 +1,7 @@
 import argparse
 import logging
 import sys
+import os
 import shutil # Moves files more robustly
 from pathlib import Path # Manipulates paths/files
 from collections import defaultdict # Groups by extension
@@ -43,7 +44,7 @@ EXTENSION_MAP.update({
 # --- Organizer Main Class ---
 class FileOrganizer:
     """
-    Sorts files in a source folder into subfolders in a destination,
+    Sorts files in a source folder into sub-folders in a destination,
     based on rules (initially, file extension).
     """
     def __init__(self, source_dir: Path, dest_dir: Path, dry_run: bool = False):
