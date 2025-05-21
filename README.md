@@ -165,13 +165,19 @@ All 10 tests should pass.
 
 ## Future Enhancements (Ideas)
 
-- While this tool is already quite capable, here are some potential future enhancements:
-- Configuration File: Allow EXTENSION_MAP to be loaded from an external JSON or YAML file for easier customization without modifying the script.
-- Customizable Naming for Duplicates: Option to define a different pattern for renaming conflicting files.
-- "Undo" Functionality: A more advanced feature to revert the last organization (would require careful state management).
-- GUI Version: A graphical user interface for users less comfortable with the command line.
-- Parallel Processing: For very large numbers of files, explore parallelizing hash calculations or file operations.
-- Plugin System: Allow users to write plugins for custom actions or categorization rules.
+While this tool is already quite capable, here are some potential future enhancements:
+
+*   **Interactive & Customizable Extension Mapping (Under Development / Next Up!):**
+    *   Allow users to interactively define destination folders for newly discovered file extensions not present in the default map during an organization session.
+    *   Provide an option to review and customize the default `EXTENSION_MAP` before organizing.
+    *   Implement a user configuration file (e.g., JSON or YAML) to persist custom mappings between sessions, making the tool highly adaptable to individual user preferences and evolving needs.
+*   **Configuration File for `EXTENSION_MAP`:** (Este pode ser combinado ou ser um sub-item do anterior) Allow `EXTENSION_MAP` to be loaded from an external JSON or YAML file for easier customization without modifying the script.
+*   **Enhanced CLI with `Typer` or `Click`:** Improve the command-line experience with more advanced argument parsing, auto-completion hints, and richer help messages.
+*   **Customizable Naming for Duplicates:** Option to define a different pattern for renaming conflicting files.
+*   **"Undo" Functionality:** A more advanced feature to revert the last organization (would require careful state management).
+*   **GUI Version:** A graphical user interface for users less comfortable with the command line.
+*   **Parallel Processing:** For very large numbers of files, explore parallelizing hash calculations or file operations.
+*   **Plugin System:** Allow users to write plugins for custom actions or categorization rules.
 
 ## License
 This project is licensed under the MIT License - see the LICENSE.md file for details.
