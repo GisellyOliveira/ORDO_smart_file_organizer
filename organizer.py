@@ -360,6 +360,27 @@ class FileOrganizer:
         """
         logger.info(f"Starting recursive organization process for '{self.source_dir}'...")
 
+        # --- NEW LOGIC TO DISCOVER EXTENSIONS ---
+        print("DEBUG: PERFORMING EXTENSION DISCOVERY!!!") # Checking if process starts
+        logger.info(f"Scanning '{self.source_dir}' to discover all file extensions...")
+        found_extensions = set() # Using set to store unique extensions
+
+        for item_path_discovery in self.source_dir.rglob('*'): # Use a different variable name to avoid conflict
+            if item_path_discovery.is_file():
+                extension = item_path_discovery.suffix.lower() # Get extension in lowercase
+
+                if extension: # Add only if the extension is not empty
+                    found_extensions.add(extension)
+        
+        if found_extensions:
+            logger.info(f"Discovered the following extensions in the source directory:") 
+            # Sort the list of extensions for consistent and readable output
+            for ext in sorted(list(found_extensions)):
+                logger.info(f"  - {ext}")
+        else:
+            logger.info("No files with extensions found in the source directory.")
+        # --- END OF NEW EXTENSION DISCOVERY LOGIC ---
+
         total_files_scanned = 0
         files_considered_for_processing = 0 # Files that pass the extension filter
         files_ignored_by_rule = 0           # Files ignored due to no/unmapped extension
@@ -369,10 +390,11 @@ class FileOrganizer:
         self.skipped_identical_duplicates = 0
 
         # `Path.rglob('*')` recursively finds all files and directories.
+        # This loop is for the actual processing and moving of files.
         for item_path in self.source_dir.rglob('*'):
             if item_path.is_file():
                 total_files_scanned += 1
-                logger.debug(f"Scanning file: '{item_path}'")
+                logger.debug(f"Scanning file: '{item_path}'") # Clarified log message
 
                 # Determine the target category folder or None if the file should be ignored.
                 destination_category_folder = self._get_destination_folder_or_ignore(item_path)
