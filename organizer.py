@@ -132,10 +132,15 @@ class FileOrganizer:
         self.dry_run = dry_run
         self.files_successfully_moved_or_renamed = 0
         self.skipped_identical_duplicates = 0
+        # Initialize the session-specific extension map as a copy of the global default.
+        # This map can be updated during the organize() method based on user input
+        # for the current session.
+        self.session_extension_map = EXTENSION_MAP.copy() 
         logger.info(
             f"Organizer initialized. Source: '{self.source_dir}', "
             f"Destination: '{self.dest_dir}', Dry Run: {self.dry_run}"
         )
+
 
     def _calculate_file_hash(self, file_path: Path, hash_algo: str = "sha256", buffer_size: int = 65536) -> Optional[str]:
         """
@@ -201,9 +206,15 @@ class FileOrganizer:
             logger.debug(f"Ignoring file '{file_path.name}' (reason: no extension).")
             return None
 
-        target_subfolder_name = EXTENSION_MAP.get(extension)
+        target_subfolder_name = self.session_extension_map.get(extension)
+
         if not target_subfolder_name:
-            logger.debug(f"Ignoring file '{file_path.name}' (reason: extension '{extension}' not in EXTENSION_MAP).")
+            # This log now correctly reflects that the extension might be in the
+            # session-specific map, which could include user-defined mapping or omissions.
+            logger.debug(
+                f"Ignoring file '{file_path.name}' (reason: extension '{extension}' "
+                f"not in current session's extension map)."
+            )
             return None
 
         return self.dest_dir / target_subfolder_name
@@ -361,14 +372,12 @@ class FileOrganizer:
         logger.info(f"Starting recursive organization process for '{self.source_dir}'...")
 
         # --- NEW LOGIC TO DISCOVER EXTENSIONS ---
-        print("DEBUG: PERFORMING EXTENSION DISCOVERY!!!") # Checking if process starts
         logger.info(f"Scanning '{self.source_dir}' to discover all file extensions...")
         found_extensions = set() # Using set to store unique extensions
 
         for item_path_discovery in self.source_dir.rglob('*'): # Use a different variable name to avoid conflict
             if item_path_discovery.is_file():
                 extension = item_path_discovery.suffix.lower() # Get extension in lowercase
-
                 if extension: # Add only if the extension is not empty
                     found_extensions.add(extension)
         
@@ -380,7 +389,87 @@ class FileOrganizer:
         else:
             logger.info("No files with extensions found in the source directory.")
         # --- END OF NEW EXTENSION DISCOVERY LOGIC ---
+            
+        # --- INTERACTIVE MAPPING FOR UNMAPPED EXTENSIONS ---
+        # We will use a copy of the global EXTENSION_MAP for this session,
+        # so modifications don't affect other instances or future default runs
+        # unless explicitly saved by the user later.
+        # For now, let's assume self.extension_map will be this session's map.
+        # In a more advanced version, self.extension_map might be loaded from user config in __init__.
+        
+        # Create a working copy of the extension map for this session
+        # This allows modifications without altering the global EXTENSION_MAP directly
+        # or affecting other FileOrganizer instances if this class were used differently.
+        # For simplicity now, we'll directly use EXTENSION_MAP and potentially modify a copy later.
+        # Let's define what the "current" map is for this session.
+        # For now, we'll build up `session_specific_mappings` and then decide how to merge/use it.
+        
+        current_default_mapped_extensions = set(self.session_extension_map.keys())
+        unmapped_extensions = found_extensions - current_default_mapped_extensions
 
+        # This dictionary will hold new mapping defined by user in this sessions.
+        newly_mapped_by_user = {}
+
+        if unmapped_extensions:
+            logger.info("---------------------------------------------------------------------")
+            logger.info("Interactive Extension Mapping:")
+            logger.info("The following discovered extensions are not in the default map:")
+            for ext in sorted(list(unmapped_extensions)):
+                logger.info(f"  - {ext}")
+            
+            logger.info("You will now be prompted to assign a destination folder for each.")
+            logger.info("Pressing ENTER without typing a folder name will ignore the extension for this session.")
+            logger.info("---------------------------------------------------------------------")
+
+            for ext in sorted(list(unmapped_extensions)):
+                while True:
+                    prompt_message = (
+                        f"For extension '{ext}': Enter target folder name "
+                        f"(e.g., MyCustomFiles) or leave blank to IGNORE: "
+                    )
+                    try:
+                        user_folder_name = input(prompt_message).strip()
+                    except EOFError: # Handle if input stream is closed (e.g., piping)
+                        logger.warning(f"EOF encountered. Ignoring remaining unmapped extensions.")
+                        user_folder_name = "" # Treat as ignore
+                        unmapped_extensions = set() # Clear remaining to stop loop
+                        break
+
+                    if not user_folder_name:
+                        logger.info(f"  -> Extension '{ext}' will be IGNORED for this session.")
+                        break
+
+                    # Basic validation for folder names (can be expanded)
+                    # For simplicity, we'll just check for obviously problematic characters.
+                    # A more robust solution would check against OS-specific invalid characters.
+                    invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+                    if any(char in user_folder_name for char in invalid_chars) or \
+                       user_folder_name.startswith('.') or user_folder_name.endswith('.') or \
+                       user_folder_name.endswith(' '):
+                        logger.warning(
+                            f"  -> Invalid folder name: '{user_folder_name}'. "
+                            f"Please use valid characters and avoid slashes, leading/trailing dots or spaces."
+                        )
+                        continue # Ask again for the same extension
+
+                    logger.info(f"  -> Extension '{ext}' will be organized into folder: '{user_folder_name}'")
+                    self.session_extension_map[ext] = user_folder_name
+                    newly_mapped_by_user[ext] = user_folder_name
+                    break
+
+            if newly_mapped_by_user:
+                logger.info("---------------------------------------------------------------------")
+                logger.info("Summary of new mapping for this session:")
+                for ext, folder in newly_mapped_by_user.items():
+                    logger.info(f"  '{ext}' will go to '{folder}'")
+                logger.info("---------------------------------------------------------------------")
+        
+        else: # No unmapped extensions found
+            logger.info("All discovered extensions are already covered by the current session's mappings.")
+        # --- END OF INTERACTIVE MAPPING LOGIC ---
+
+        # --- Actual Organization Pass (using the potentially updated self.session_extension_map) ---
+        logger.info("Proceeding with file organization...")
         total_files_scanned = 0
         files_considered_for_processing = 0 # Files that pass the extension filter
         files_ignored_by_rule = 0           # Files ignored due to no/unmapped extension
@@ -394,37 +483,30 @@ class FileOrganizer:
         for item_path in self.source_dir.rglob('*'):
             if item_path.is_file():
                 total_files_scanned += 1
-                logger.debug(f"Scanning file: '{item_path}'") # Clarified log message
+                # Use DEBUG for per-file scanning during organization pass if -v is used
+                logger.debug(f"Processing file: '{item_path}'") 
 
-                # Determine the target category folder or None if the file should be ignored.
+                # We are modifying _get_destination_folder_or_ignore to use self.session_extension_map
+
                 destination_category_folder = self._get_destination_folder_or_ignore(item_path)
 
                 if destination_category_folder is None:
-                    # File was ignored by extension rules (logged in _get_destination_folder_or_ignore).
                     files_ignored_by_rule += 1
-                    continue # Move to the next item
+                    continue
 
-                # If we reach here, the file passed the extension filter.
                 files_considered_for_processing += 1
-
-                # Attempt to move the file, handling duplicates.
-                # Counters for successful moves/renames and skipped identical duplicates
-                # are updated within `_move_file_with_deduplication`.
                 self._move_file_with_deduplication(item_path, destination_category_folder)
-
+            
             elif item_path.is_dir():
-                # We don't need to do anything special for directories here,
-                # as `rglob` handles the recursion into subdirectories.
-                logger.debug(f"Scanning within directory: '{item_path}'.")
+                logger.debug(f"Scanning within directory (organization pass): '{item_path}'.")
             else:
-                # Log items that are neither files nor directories (e.g., symlinks, special files)
-                logger.warning(f"Skipping item that is not a file or directory: '{item_path}'")
-
+                logger.warning(f"Skipping item that if not a file or directory: '{item_path}'")
+                
         # --- Log Summary ---
         log_summary_prefix = "Dry run finished." if self.dry_run else "Organization finished."
         logger.info(f"--- {log_summary_prefix} ---")
-        logger.info(f"Total files scanned: {total_files_scanned}")
-        logger.info(f"Files ignored by extension rules: {files_ignored_by_rule}")
+        logger.info(f"Total files scanned (during organization pass): {total_files_scanned}")
+        logger.info(f"Files ignored by (default or session) extension rules: {files_ignored_by_rule}")
 
         if self.dry_run:
             logger.info(f"Files that would be considered for moving/renaming: {files_considered_for_processing}")
