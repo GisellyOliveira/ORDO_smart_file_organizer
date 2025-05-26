@@ -4,7 +4,9 @@ import sys
 import shutil
 from pathlib import Path # To manipulate paths and files
 import hashlib
-from typing import Optional
+from typing import Optional, Dict
+import json
+from platformdirs import user_config_dir
 
 # --- Logging Configuration ---
 # Basic logging setup to output messages to the console.
@@ -18,12 +20,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__) # Logger specific to this module
 
+# --- Constants ---
+APP_NAME = "Smart Data Wrangle - CLI Version"
+APP_AUTHOR = "Giselly Oliveira"
+CONFIG_FILE_NAME = "extension_map_config.json"
+
 # --- Extension to Folder Mapping ---
 # This dictionary defines how files are categorized based on their extensions.
 # Only files with extensions present in this map will be processed by the organizer.
 # Keys are file extensions (lowercase, with a leading dot).
 # Values are the names of the subfolders to be created in the destination directory.
-EXTENSION_MAP = {
+DEFAULT_EXTENSION_MAP = {
     # Text & Documents
     '.txt': "TextFiles",
     '.pdf': "Documents",
@@ -132,14 +139,90 @@ class FileOrganizer:
         self.dry_run = dry_run
         self.files_successfully_moved_or_renamed = 0
         self.skipped_identical_duplicates = 0
-        # Initialize the session-specific extension map as a copy of the global default.
-        # This map can be updated during the organize() method based on user input
-        # for the current session.
-        self.session_extension_map = EXTENSION_MAP.copy() 
+
+        self.config_path = self._get_config_file_path()
+        self.session_extension_map = self._load_extension_map_config()
+        # Flag to track if the map was changed during the session
+        self._map_changed_this_session = False
+
         logger.info(
             f"Organizer initialized. Source: '{self.source_dir}', "
             f"Destination: '{self.dest_dir}', Dry Run: {self.dry_run}"
         )
+        logger.info(f"Using configuration from: {self.config_path}")
+    
+
+    def _get_config_file_path(self) -> Path:
+        """Determines the path for the configuration file.""" 
+        # uses platformdirs to find an appropriate user-specific config directory
+        config_dir = Path(user_config_dir(APP_NAME, APP_AUTHOR, roaming=True))
+        config_dir.mkdir(parents=True, exist_ok=True) # Ensure the directory exists
+        return config_dir / CONFIG_FILE_NAME
+    
+
+    def _load_extension_map_config(self) -> Dict[str, str]:
+        """Loads the extension map from the user's config file, or returns defaults."""
+        if self.config_path.exists() and self.config_path.is_file():
+            try:
+                with self.config_path.open('r', encoding='utf-8') as f:
+                    user_map = json.load(f)
+                # Basic validation: check if it's a dictionary
+                if isinstance(user_map, dict):
+                    logger.info(f"Loaded custom extension map from {self.config_path}")
+                    # Merge with defaults, user_map takes precedence for existing keys
+                    # and adds new keys.
+                    # Starts with a copy of defaults, then update.
+                    # This ensures any new defaults added to the script are available
+                    # if not overridden by the user.
+                    combined_map = DEFAULT_EXTENSION_MAP.copy()
+                    combined_map.update(user_map)
+                    return combined_map
+                else:
+                    logger.warning(
+                        f"Configuration file {self.config_path} is not a valid JSON dictionary. "
+                        f"Using default extension map."
+                    )
+            except json.JSONDecodeError:
+                logger.warning(
+                    f"Error decoding JSON from {self.config_path}. "
+                    f"Using default extension map."
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Unexpected error loading config from {self.config_path}: {e}. "
+                    f"Using default extension map.", exc_info=True
+                ) 
+        else:
+            logger.info("No custom configuration file found. Using default extension map.")
+        return DEFAULT_EXTENSION_MAP.copy() # Return a copy of defaults
+
+
+    def _save_extension_map_config(self) -> None:
+        """Saves the current session_extension_map to the user's config file."""
+        if not self._map_changed_this_session and not self.dry_run:
+            # Only prompt to save if changes were made ans it's not a dry run
+            # Or, always prompt if you prefer, and let user decide.
+            # For now, let's only prompt if changes were made.
+            logger.info("No changes made to extension mappings this session, or it was a dry run. Nothing to save.")
+            return
+        
+        # Always ask in non-dry-run if changes were made, or if new mappings were added.
+        # The self._map_changed_this_session flag will track this.
+        if not self.dry_run and self._map_changed_this_session:
+            try:
+                save_choice = input("Save current extension mappings for future use? (yes/No): ").strip().lower()[:1]
+                if save_choice == 'y':
+                    with self.config_path.open('w', encoding='utf-8') as f:
+                        json.dump(self.session_extension_map, f, indent=4, sort_keys=True)
+                    logger.info(f"Extension mappings saved to {self.config_path}")
+                else:
+                    logger.info(f"extension mappings not saved for this session.")
+            except EOFError:
+                logger.warning("Input stream closed (EOF). Mappings not saved.")
+            except Exception as e:
+                logger.error(f"Error saving configuration to {self.config_path}: {e}", exc_info=True)
+        elif self.dry_run:
+            logger.info("Dry run: Configuration changes will not be saved.")
 
 
     def _calculate_file_hash(self, file_path: Path, hash_algo: str = "sha256", buffer_size: int = 65536) -> Optional[str]:
@@ -369,9 +452,10 @@ class FileOrganizer:
           skipped duplicates.
         Finally, logs a summary of the organization process.
         """
-        logger.info(f"Starting recursive organization process for '{self.source_dir}'...")
+        logger.info(f"Starting interactive organization process for '{self.source_dir}'...")
+        self._map_changed_this_session = False # reset flag at the start of organization
 
-        # --- NEW LOGIC TO DISCOVER EXTENSIONS ---
+        # --- DISCOVER ALL EXTENSIONS IN SOURCE DIRECTORY ---
         logger.info(f"Scanning '{self.source_dir}' to discover all file extensions...")
         found_extensions = set() # Using set to store unique extensions
 
@@ -387,9 +471,9 @@ class FileOrganizer:
             for ext in sorted(list(found_extensions)):
                 logger.info(f"  - {ext}")
         else:
-            logger.info("No files with extensions found in the source directory.")
-        # --- END OF NEW EXTENSION DISCOVERY LOGIC ---
-            
+            logger.info("No files with extensions found in the source directory. Nothing to organize based on extensions.")
+        # --- END OF DISCOVER ALL EXTENSIONS IN SOURCE DIRECTORY ---
+
         # --- INTERACTIVE MAPPING FOR UNMAPPED EXTENSIONS ---
         # We will use a copy of the global EXTENSION_MAP for this session,
         # so modifications don't affect other instances or future default runs
@@ -404,8 +488,8 @@ class FileOrganizer:
         # Let's define what the "current" map is for this session.
         # For now, we'll build up `session_specific_mappings` and then decide how to merge/use it.
         
-        current_default_mapped_extensions = set(self.session_extension_map.keys())
-        unmapped_extensions = found_extensions - current_default_mapped_extensions
+        current_mapped_extensions_in_session = set(self.session_extension_map.keys())
+        unmapped_extensions = found_extensions - current_mapped_extensions_in_session
 
         # This dictionary will hold new mapping defined by user in this sessions.
         newly_mapped_by_user = {}
@@ -413,12 +497,12 @@ class FileOrganizer:
         if unmapped_extensions:
             logger.info("---------------------------------------------------------------------")
             logger.info("Interactive Extension Mapping:")
-            logger.info("The following discovered extensions are not in the default map:")
+            logger.info("The following discovered extensions are not in the current mappings:")
             for ext in sorted(list(unmapped_extensions)):
                 logger.info(f"  - {ext}")
             
             logger.info("You will now be prompted to assign a destination folder for each.")
-            logger.info("Pressing ENTER without typing a folder name will ignore the extension for this session.")
+            logger.info("Pressing ENTER (leaving blank) will ignore the extension for this session.")
             logger.info("---------------------------------------------------------------------")
 
             for ext in sorted(list(unmapped_extensions)):
@@ -430,13 +514,17 @@ class FileOrganizer:
                     try:
                         user_folder_name = input(prompt_message).strip()
                     except EOFError: # Handle if input stream is closed (e.g., piping)
-                        logger.warning(f"EOF encountered. Ignoring remaining unmapped extensions.")
+                        logger.warning(f"\nInput stream closed (EOF). Ignoring remaining unmapped extensions.")
                         user_folder_name = "" # Treat as ignore
                         unmapped_extensions = set() # Clear remaining to stop loop
                         break
 
                     if not user_folder_name:
                         logger.info(f"  -> Extension '{ext}' will be IGNORED for this session.")
+                        # To explicitly mark as ignored for this session if needed later:
+                        # if ext in self.session_extension_map:
+                        #     del self.session_extension_map[ext] 
+                        #     self._map_changed_this_session = True
                         break
 
                     # Basic validation for folder names (can be expanded)
@@ -453,23 +541,27 @@ class FileOrganizer:
                         continue # Ask again for the same extension
 
                     logger.info(f"  -> Extension '{ext}' will be organized into folder: '{user_folder_name}'")
-                    self.session_extension_map[ext] = user_folder_name
-                    newly_mapped_by_user[ext] = user_folder_name
+                    # Update the session map and mark that changes were made
+                    if ext not in self.session_extension_map or self.session_extension_map.get(ext) != user_folder_name:
+                        self.session_extension_map[ext] = user_folder_name
+                        self._map_changed_this_session = True
+
+                        newly_mapped_by_user[ext] = user_folder_name 
                     break
 
-            if newly_mapped_by_user:
+            if self._map_changed_this_session: # Log summary ony if new mappings were effectively added/changed
                 logger.info("---------------------------------------------------------------------")
                 logger.info("Summary of new mapping for this session:")
-                for ext, folder in newly_mapped_by_user.items():
-                    logger.info(f"  '{ext}' will go to '{folder}'")
+                # The actual content of self.session_extension_map will be used.
+                logger.info("Current session mappings will be used.") # Details can be complex to summarize here if defaults were also changed
                 logger.info("---------------------------------------------------------------------")
         
         else: # No unmapped extensions found
             logger.info("All discovered extensions are already covered by the current session's mappings.")
-        # --- END OF INTERACTIVE MAPPING LOGIC ---
+        # --- END OF INTERACTIVE MAPPING FOR UNMAPPED EXTENSIONS ---
 
         # --- Actual Organization Pass (using the potentially updated self.session_extension_map) ---
-        logger.info("Proceeding with file organization...")
+        logger.info("Proceeding with file organization using current session mappings...")
         total_files_scanned = 0
         files_considered_for_processing = 0 # Files that pass the extension filter
         files_ignored_by_rule = 0           # Files ignored due to no/unmapped extension
@@ -520,6 +612,11 @@ class FileOrganizer:
         unaccounted_for = files_considered_for_processing - (self.files_successfully_moved_or_renamed + self.skipped_identical_duplicates)
         if not self.dry_run and unaccounted_for > 0:
             logger.info(f"Files considered but not moved/skipped (e.g., due to errors): {unaccounted_for}")
+        
+        # --- SAVE CONFIGURATION (if not dry_run and changes were made) ---
+        self._save_extension_map_config()
+        # ---  END OF SAVE CONFIGURATION ---
+
 
 def main() -> None:
     """
