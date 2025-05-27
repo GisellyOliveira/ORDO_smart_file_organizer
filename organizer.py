@@ -197,6 +197,96 @@ class FileOrganizer:
         return DEFAULT_EXTENSION_MAP.copy() # Return a copy of defaults
 
 
+    def _interactive_edit_existing_mappings(self) -> None:
+        """ 
+        Allows the user to interactively review and modify existing extension mappings
+        in the current session's map (self.session_extension_map).
+        Sets self._map_changed_this_session to True if any changes are made.
+        """
+        try:
+            review_choice = input("Review or modify current extension mappings? (yes/No, default: No): ").strip().lower()
+            # Get the first character if input is not empty, otherwise default to 'n' (for No)
+            first_char_review_choice = review_choice[0] if review_choice else 'n'
+        except EOFError:
+            logger.warning("\nInput stream closed (EOF). Skipping review of existing mappings.")
+            return
+        
+        if first_char_review_choice != 'y':
+            logger.info("Skipping review of existing mappings.")
+            return
+        
+        logger.info("---------------------------------------------------------------------")
+        logger.info("Review/Modify Existing Extension Mappings:")
+        
+        if not self.session_extension_map:
+            logger.info("  No mappings currently defined.")
+        else:
+            logger.info("Current mappings (extension -> destination folder):")
+            for ext, folder in sorted(self.session_extension_map.items()):
+                logger.info(f"  '{ext}' -> '{folder}'")
+        logger.info("---------------------------------------------------------------------")
+
+        while True:
+            try:
+                ext_to_modify_input = input("Enter extension to modify (e.g., .pdf), or type 'done' to finish: ").strip().lower()
+            except EOFError:
+                logger.warning("\nInput stream closed (EOF). Exiting modification mode.")
+                break
+
+            if ext_to_modify_input == 'done':
+                break
+
+            if not ext_to_modify_input.startswith('.') or len(ext_to_modify_input) < 2: # Basic validation for extension format
+                if ext_to_modify_input: # Only warn if it's not an empty string (which means 'exit' was intended)
+                    logger.warning(f"  Invalid extension format: '{ext_to_modify_input}'. Must start with a dot and have characters after it(e.g., .txt).")
+                continue
+
+            if ext_to_modify_input in self.session_extension_map:
+                current_folder = self.session_extension_map[ext_to_modify_input]
+                prompt_message = (
+                    f"  Extension '{ext_to_modify_input}' currently maps to '{current_folder}'.\n"
+                    f"  New folder (Enter to keep, type 'ignore' to remove mapping, or new folder name): "
+                )
+                try:
+                    new_folder_name = input(prompt_message).strip()
+                except EOFError:
+                    logger.warning("\nInput stream closed (EOF). Cancelling modification for this extension.")
+                    continue # Or break???
+
+                if not new_folder_name: # User pressed Enter, keep current
+                    logger.info(f"  Mapping for '{ext_to_modify_input}' remains '{current_folder}'.")
+                    continue
+                elif new_folder_name.lower() == 'ignore':
+                    del self.session_extension_map[ext_to_modify_input]
+                    self._map_changed_this_session = True
+                    logger.info(f"  Mapping for '{ext_to_modify_input}' removed for this session.")
+                    continue
+
+                else: # Should not happen if ext_to_modify_input was in session_extension_map
+                    logger.info(f"  Extension '{ext_to_modify_input}' was already not mapped. No change made.")
+                    # Validate new_folder_name (similar to the other interactive part)
+                    invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+                    if any(char in new_folder_name for char in invalid_chars) or \
+                        new_folder_name.startswith('.') or new_folder_name.endswith('.') or \
+                        new_folder_name.endswith(' '):
+                            logger.warning(
+                                f"  -> Invalid folder name: '{new_folder_name}'. "
+                                f"Please use valid characters and avoid slashes, leading/trailing dots or spaces."
+                            )
+                            continue # Ask again for this extension's new folder
+                    
+                    if current_folder != new_folder_name:
+                        self.session_extension_map[ext_to_modify_input] = new_folder_name
+                        self._map_changed_this_session = True
+                        logger.info(f"  Mapping for '{ext_to_modify_input}' changed from '{current_folder}' to '{new_folder_name}'.")
+                    else:
+                        logger.info(f"  Mapping for '{ext_to_modify_input}' remains '{current_folder}' (no change).")
+            else:
+                logger.info(f"  Extension '{ext_to_modify_input}' not found in current mappings. You can add it when prompted for unmapped extensions.")
+                logger.info("Finished reviewing/modifying existing mappings.")
+                logger.info("---------------------------------------------------------------------")
+
+
     def _save_extension_map_config(self) -> None:
         """Saves the current session_extension_map to the user's config file."""
         if not self._map_changed_this_session and not self.dry_run:
@@ -210,8 +300,11 @@ class FileOrganizer:
         # The self._map_changed_this_session flag will track this.
         if not self.dry_run and self._map_changed_this_session:
             try:
-                save_choice = input("Save current extension mappings for future use? (yes/No): ").strip().lower()[:1]
-                if save_choice == 'y':
+                save_choice = input("Save current extension mappings for future use? (yes/No): ").strip().lower()
+                # Get the first character if input is not empty, otherwise default to 'n' (for No)
+                first_char_save_choice = save_choice[0] if save_choice else 'n'
+                
+                if first_char_save_choice == 'y':
                     with self.config_path.open('w', encoding='utf-8') as f:
                         json.dump(self.session_extension_map, f, indent=4, sort_keys=True)
                     logger.info(f"Extension mappings saved to {self.config_path}")
@@ -441,19 +534,25 @@ class FileOrganizer:
 
     def organize(self) -> None:
         """
-        Scans the source directory (and its subdirectories) recursively and
-        organizes recognized files into the destination directory.
+        Scans the source directory, allows interactive review/modification of existing
+        extension mappings, prompts for unmapped extensions, organizes files accordingly,
+        and optionally saves updated mappings.
 
-        For each file found:
-        - Determines the appropriate destination category folder.
-        - If a valid folder is found, attempts to move the file using
-          `_move_file_with_deduplication`, which handles duplicate checks.
-        - Updates internal counters for successfully moved/renamed files and
-          skipped duplicates.
-        Finally, logs a summary of the organization process.
+        The process involves:
+        1. Discovering all unique file extensions in the source directory.
+        2. Optionally allowing the user to review and modify current extension mappings.
+        3. Identifying any remaining extensions not present in the (potentially modified)
+           `self.session_extension_map`.
+        4. Prompting the user to define destination folders for these newly unmapped extensions.
+           These new mappings are added to `self.session_extension_map`.
+        5. Iterating through all files for the actual organization using the final
+           `self.session_extension_map`.
+        6. Logging a summary and prompting to save configuration if changes were made.
         """
         logger.info(f"Starting interactive organization process for '{self.source_dir}'...")
-        self._map_changed_this_session = False # reset flag at the start of organization
+        # Reset flag at the start of organization. It will be set to True if any
+        # existing mapping is changed or any new mapping for an unmapped extension is added.
+        self._map_changed_this_session = False 
 
         # --- DISCOVER ALL EXTENSIONS IN SOURCE DIRECTORY ---
         logger.info(f"Scanning '{self.source_dir}' to discover all file extensions...")
@@ -472,31 +571,19 @@ class FileOrganizer:
                 logger.info(f"  - {ext}")
         else:
             logger.info("No files with extensions found in the source directory. Nothing to organize based on extensions.")
-        # --- END OF DISCOVER ALL EXTENSIONS IN SOURCE DIRECTORY ---
+            
+        # --- INTERACTIVELY REVIEW/MODIFY EXISTING MAPPINGS ---
+        # This method will modify self.session_extension_map directly and set self._map_changed_this_session
+        self._interactive_edit_existing_mappings() # User can modify defaults or loaded config here
 
-        # --- INTERACTIVE MAPPING FOR UNMAPPED EXTENSIONS ---
-        # We will use a copy of the global EXTENSION_MAP for this session,
-        # so modifications don't affect other instances or future default runs
-        # unless explicitly saved by the user later.
-        # For now, let's assume self.extension_map will be this session's map.
-        # In a more advanced version, self.extension_map might be loaded from user config in __init__.
-        
-        # Create a working copy of the extension map for this session
-        # This allows modifications without altering the global EXTENSION_MAP directly
-        # or affecting other FileOrganizer instances if this class were used differently.
-        # For simplicity now, we'll directly use EXTENSION_MAP and potentially modify a copy later.
-        # Let's define what the "current" map is for this session.
-        # For now, we'll build up `session_specific_mappings` and then decide how to merge/use it.
-        
+        # --- INTERACTIVE MAPPING FOR NEWLY UNMAPPED EXTENSIONS ---
+        # Recalculate unmapped_extensions based on the potentially modified self.session_extension_map
         current_mapped_extensions_in_session = set(self.session_extension_map.keys())
         unmapped_extensions = found_extensions - current_mapped_extensions_in_session
 
-        # This dictionary will hold new mapping defined by user in this sessions.
-        newly_mapped_by_user = {}
-
         if unmapped_extensions:
             logger.info("---------------------------------------------------------------------")
-            logger.info("Interactive Extension Mapping:")
+            logger.info("Interactive Mapping for Newly Discovered/Unmapped Extensions:")
             logger.info("The following discovered extensions are not in the current mappings:")
             for ext in sorted(list(unmapped_extensions)):
                 logger.info(f"  - {ext}")
@@ -505,7 +592,7 @@ class FileOrganizer:
             logger.info("Pressing ENTER (leaving blank) will ignore the extension for this session.")
             logger.info("---------------------------------------------------------------------")
 
-            for ext in sorted(list(unmapped_extensions)):
+            for ext in sorted(list(unmapped_extensions)): # Iterate again, in case some were handled by editing existing
                 while True:
                     prompt_message = (
                         f"For extension '{ext}': Enter target folder name "
@@ -521,10 +608,6 @@ class FileOrganizer:
 
                     if not user_folder_name:
                         logger.info(f"  -> Extension '{ext}' will be IGNORED for this session.")
-                        # To explicitly mark as ignored for this session if needed later:
-                        # if ext in self.session_extension_map:
-                        #     del self.session_extension_map[ext] 
-                        #     self._map_changed_this_session = True
                         break
 
                     # Basic validation for folder names (can be expanded)
@@ -532,35 +615,33 @@ class FileOrganizer:
                     # A more robust solution would check against OS-specific invalid characters.
                     invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
                     if any(char in user_folder_name for char in invalid_chars) or \
-                       user_folder_name.startswith('.') or user_folder_name.endswith('.') or \
-                       user_folder_name.endswith(' '):
+                        user_folder_name.startswith('.') or user_folder_name.endswith('.') or \
+                        user_folder_name.endswith(' '):
                         logger.warning(
                             f"  -> Invalid folder name: '{user_folder_name}'. "
                             f"Please use valid characters and avoid slashes, leading/trailing dots or spaces."
                         )
                         continue # Ask again for the same extension
-
+                    
+                    # If input is valid and not empty, map it.
                     logger.info(f"  -> Extension '{ext}' will be organized into folder: '{user_folder_name}'")
-                    # Update the session map and mark that changes were made
-                    if ext not in self.session_extension_map or self.session_extension_map.get(ext) != user_folder_name:
-                        self.session_extension_map[ext] = user_folder_name
-                        self._map_changed_this_session = True
-
-                        newly_mapped_by_user[ext] = user_folder_name 
+                    self.session_extension_map[ext] = user_folder_name
+                    self._map_changed_this_session = True # A mapping was added/changed
                     break
 
-            if self._map_changed_this_session: # Log summary ony if new mappings were effectively added/changed
+            if self._map_changed_this_session: # Check if any changes were made in either interactive step
                 logger.info("---------------------------------------------------------------------")
-                logger.info("Summary of new mapping for this session:")
-                # The actual content of self.session_extension_map will be used.
-                logger.info("Current session mappings will be used.") # Details can be complex to summarize here if defaults were also changed
+                logger.info("Session mappings have been updated based on your input.")
                 logger.info("---------------------------------------------------------------------")
         
-        else: # No unmapped extensions found
+        elif not found_extensions: # This case was handled by the first block, but good to be explicit
+            pass # No extension found, no unmapped extensions. 
+        
+        else: # All found extensions were already in the (potentially user-modified) session_extension_map
             logger.info("All discovered extensions are already covered by the current session's mappings.")
         # --- END OF INTERACTIVE MAPPING FOR UNMAPPED EXTENSIONS ---
 
-        # --- Actual Organization Pass (using the potentially updated self.session_extension_map) ---
+        # --- Actual Organization Pass ---
         logger.info("Proceeding with file organization using current session mappings...")
         total_files_scanned = 0
         files_considered_for_processing = 0 # Files that pass the extension filter
@@ -577,8 +658,6 @@ class FileOrganizer:
                 total_files_scanned += 1
                 # Use DEBUG for per-file scanning during organization pass if -v is used
                 logger.debug(f"Processing file: '{item_path}'") 
-
-                # We are modifying _get_destination_folder_or_ignore to use self.session_extension_map
 
                 destination_category_folder = self._get_destination_folder_or_ignore(item_path)
 
