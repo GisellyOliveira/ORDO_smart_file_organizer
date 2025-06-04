@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__) # Logger specific to this module
 
 # --- Constants ---
-APP_NAME = "Smart Data Wrangle - CLI Version"
+APP_NAME = "File Organizer - CLI Version"
 APP_AUTHOR = "Giselly Oliveira"
 CONFIG_FILE_NAME = "extension_map_config.json"
 
@@ -251,19 +251,17 @@ class FileOrganizer:
                     new_folder_name = input(prompt_message).strip()
                 except EOFError:
                     logger.warning("\nInput stream closed (EOF). Cancelling modification for this extension.")
-                    continue # Or break???
+                    continue 
 
                 if not new_folder_name: # User pressed Enter, keep current
                     logger.info(f"  Mapping for '{ext_to_modify_input}' remains '{current_folder}'.")
-                    continue
+                
                 elif new_folder_name.lower() == 'ignore':
                     del self.session_extension_map[ext_to_modify_input]
                     self._map_changed_this_session = True
                     logger.info(f"  Mapping for '{ext_to_modify_input}' removed for this session.")
-                    continue
 
                 else: # Should not happen if ext_to_modify_input was in session_extension_map
-                    logger.info(f"  Extension '{ext_to_modify_input}' was already not mapped. No change made.")
                     # Validate new_folder_name (similar to the other interactive part)
                     invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
                     if any(char in new_folder_name for char in invalid_chars) or \
@@ -273,18 +271,18 @@ class FileOrganizer:
                                 f"  -> Invalid folder name: '{new_folder_name}'. "
                                 f"Please use valid characters and avoid slashes, leading/trailing dots or spaces."
                             )
-                            continue # Ask again for this extension's new folder
-                    
-                    if current_folder != new_folder_name:
-                        self.session_extension_map[ext_to_modify_input] = new_folder_name
-                        self._map_changed_this_session = True
-                        logger.info(f"  Mapping for '{ext_to_modify_input}' changed from '{current_folder}' to '{new_folder_name}'.")
                     else:
-                        logger.info(f"  Mapping for '{ext_to_modify_input}' remains '{current_folder}' (no change).")
+                        if current_folder != new_folder_name:
+                            self.session_extension_map[ext_to_modify_input] = new_folder_name
+                            self._map_changed_this_session = True
+                            logger.info(f"  Mapping for '{ext_to_modify_input}' changed from '{current_folder}' to '{new_folder_name}'.")
+                        else:
+                            logger.info(f"  Mapping for '{ext_to_modify_input}' remains '{current_folder}' (no change).")
             else:
                 logger.info(f"  Extension '{ext_to_modify_input}' not found in current mappings. You can add it when prompted for unmapped extensions.")
-                logger.info("Finished reviewing/modifying existing mappings.")
-                logger.info("---------------------------------------------------------------------")
+                
+        logger.info("Finished reviewing/modifying existing mappings.")
+        logger.info("---------------------------------------------------------------------")
 
 
     def _save_extension_map_config(self) -> None:
@@ -582,7 +580,6 @@ class FileOrganizer:
         unmapped_extensions = found_extensions - current_mapped_extensions_in_session
 
         if unmapped_extensions:
-            logger.info("---------------------------------------------------------------------")
             logger.info("Interactive Mapping for Newly Discovered/Unmapped Extensions:")
             logger.info("The following discovered extensions are not in the current mappings:")
             for ext in sorted(list(unmapped_extensions)):
