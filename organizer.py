@@ -287,33 +287,32 @@ class FileOrganizer:
 
     def _save_extension_map_config(self) -> None:
         """Saves the current session_extension_map to the user's config file."""
-        if not self._map_changed_this_session and not self.dry_run:
-            # Only prompt to save if changes were made ans it's not a dry run
-            # Or, always prompt if you prefer, and let user decide.
-            # For now, let's only prompt if changes were made.
-            logger.info("No changes made to extension mappings this session, or it was a dry run. Nothing to save.")
+        # it checks if there were no changes. If so, report and exit (regardless of dry_run).
+        if not self._map_changed_this_session:
+            logger.info("No changes made to extension mappings this session. Nothing to save.")
             return
         
-        # Always ask in non-dry-run if changes were made, or if new mappings were added.
-        # The self._map_changed_this_session flag will track this.
-        if not self.dry_run and self._map_changed_this_session:
-            try:
-                save_choice = input("Save current extension mappings for future use? (yes/No): ").strip().lower()
-                # Get the first character if input is not empty, otherwise default to 'n' (for No)
-                first_char_save_choice = save_choice[0] if save_choice else 'n'
-                
-                if first_char_save_choice == 'y':
-                    with self.config_path.open('w', encoding='utf-8') as f:
-                        json.dump(self.session_extension_map, f, indent=4, sort_keys=True)
-                    logger.info(f"Extension mappings saved to {self.config_path}")
-                else:
-                    logger.info(f"extension mappings not saved for this session.")
-            except EOFError:
-                logger.warning("Input stream closed (EOF). Mappings not saved.")
-            except Exception as e:
-                logger.error(f"Error saving configuration to {self.config_path}: {e}", exc_info=True)
-        elif self.dry_run:
+        # If there were changes, check if it is dry_run. If so, report and exit.
+        if self.dry_run:
             logger.info("Dry run: Configuration changes will not be saved.")
+            return
+        
+        # If there have been changes AND it is NOT dry_run, then ask the user.
+        try:
+            save_choice = input("Save current extension mappings for future use? (yes/No): ").strip().lower()
+            # Get the first character if input is not empty, otherwise default to 'n' (for No)
+            first_char_save_choice = save_choice[0] if save_choice else 'n'
+                
+            if first_char_save_choice == 'y':
+                with self.config_path.open('w', encoding='utf-8') as f:
+                        json.dump(self.session_extension_map, f, indent=4, sort_keys=True)
+                logger.info(f"Extension mappings saved to {self.config_path}")
+            else:
+                logger.info(f"Extension mappings not saved for this session.")
+        except EOFError:
+            logger.warning("Input stream closed (EOF). Mappings not saved.")
+        except Exception as e:
+            logger.error(f"Error saving configuration to {self.config_path}: {e}", exc_info=True)
 
 
     def _calculate_file_hash(self, file_path: Path, hash_algo: str = "sha256", buffer_size: int = 65536) -> Optional[str]:
