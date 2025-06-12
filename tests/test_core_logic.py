@@ -244,3 +244,61 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
         self.assertIn(f"Ignoring file '{self.file_unmapped_ext.name}' (reason: extension '{self.file_unmapped_ext.suffix}' not in current session's extension map)", "\n".join(log_context.output))
 
         mock_save_config.assert_called_once()
+    
+
+    @patch('organizer.shutil.move')
+    @patch('builtins.input', return_value='')
+    @patch.object(FileOrganizer, '_interactive_edit_existing_mappings')
+    @patch.object(FileOrganizer, '_save_extension_map_config')
+    def test_deduplication_skips_identical_file(
+        self,
+        mock_save_config: MagicMock,
+        mock_interactive_edit: MagicMock,
+        mock_input: MagicMock,
+        mock_shutil_move: MagicMock
+    ):
+        """ 
+        Tests that if an identical file (same name, same hash) exists at the 
+        destination, the source file is skipped.
+        """
+        # 1. Configuring FileOrganizer
+        mock_config_path = MagicMock(spec=Path, name="MockConfigPathSkipDup")
+        # Using DEFAULT_EXTENSION_MAP for this test
+        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path), \
+            patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
+            organizer = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=False)
+            organizer.session_extension_map = DEFAULT_EXTENSION_MAP.copy()
+        
+        # 2. It sets the source file for this test
+        # self.file_dup_txt_src hash "same_hash_for_txt_dup"
+        self.mock_source_dir.rglob.return_value = [self.file_dup_txt_src]
+
+        # 3. It sets the target file to ALREADY EXIST with the SAME HASH
+        # and gets the target folder mock for .txt (TextFiles)
+        dest_textfiles_folder_mock = self.category_folder_mocks["TextFiles"]
+        self._configure_destination_file_mock(
+            dest_category_folder_mock=dest_textfiles_folder_mock,
+            file_name=self.file_dup_txt_src.name, # Same name
+            exists=True,
+            content_hash="same_hash_for_txt_dup"
+        )
+
+        # 4. Mocking _calculate_file_hash (already done via self._mock_calculate_hash_side_effect)
+        # and running organize
+        with patch.object(organizer, '_calculate_file_hash', side_effect=self._mock_calculate_hash_side_effect):
+            # We expect INFO logs for "Skipping identical file" and DEBUG for the comparison
+            with self.assertLogs(self.logger, level='DEBUG') as log_context: # Using DEBUG to see "Comparing hashes..."
+                organizer.organize()
+        
+        # 5. Assertions
+        mock_interactive_edit.assert_called_once()
+        mock_shutil_move.assert_not_called()
+
+        self.assertEqual(organizer.files_successfully_moved_or_renamed, 0)
+        self.assertEqual(organizer.skipped_identical_duplicates, 1) # 1 file skipped
+
+        log_output_str = "\n".join(log_context.output)
+        self.assertIn(f"File '{self.file_dup_txt_src.name}' already exists at '{str(dest_textfiles_folder_mock)}'. Comparing hashes...", log_output_str)
+        self.assertIn(f"Skipping identical file (same name '{self.file_dup_txt_src.name}', same hash)", log_output_str)
+
+        mock_save_config.assert_called_once()
