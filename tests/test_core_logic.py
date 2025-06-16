@@ -302,3 +302,69 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
         self.assertIn(f"Skipping identical file (same name '{self.file_dup_txt_src.name}', same hash)", log_output_str)
 
         mock_save_config.assert_called_once()
+
+
+    @patch('organizer.shutil.move')
+    @patch('builtins.input', return_value='') # Ignore new extensions
+    @patch.object(FileOrganizer, '_interactive_edit_existing_mappings')
+    @patch.object(FileOrganizer, '_save_extension_map_config')
+    def test_deduplication_renames_conflicting_file(
+        self,
+        mock_save_config: MagicMock,
+        mock_interactive_edit: MagicMock,
+        mock_input: MagicMock,
+        mock_shutil_move: MagicMock
+    ):
+        """
+        Tests that if with the same name but different content (hash)
+        exists at the destination, the source file is renamed and moved.
+        """
+        # 1. Configuring FileOrganizer
+        mock_config_path = MagicMock(spec=Path, name="MockConfigPathRenameDup")
+        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path), \
+            patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
+            organizer = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=False)
+            organizer.session_extension_map = DEFAULT_EXTENSION_MAP.copy()
+        
+        # 2. Defining the source file for this test
+        # self.file_dup_img_src has name "photo_dup.png" and hash "image_hash_source_A
+        self.mock_source_dir.rglob.return_value = [self.file_dup_img_src]
+
+        # 3. Setting the target file to ALREADY EXIST with the SAME NAME but DIFFERENT HASH
+        dest_images_folder_mock = self.category_folder_mocks["Images"] #.png files go to Images folder
+
+        # Mock to original file in destination (photo_dup.png)
+        self._configure_destination_file_mock(
+            dest_category_folder_mock=dest_images_folder_mock,
+            file_name=self.file_dup_img_src.name, # Same name
+            exists=True,
+            content_hash="image_hash_DEST_B_DIFFERENT" # Different hash!
+        )
+
+        # 4. Mocking _calculate_file_hash and executing organize
+        with patch.object(organizer, '_calculate_file_hash', side_effect=self._mock_calculate_hash_side_effect):
+            with self.assertLogs(self.logger, level='DEBUG') as log_context: # DEBUG for "Comparing hashes..."
+                organizer.organize()
+        
+        # Assertions:
+        mock_interactive_edit.assert_called_once()
+        
+        # Building the expected name for the renamed file
+        source_file_path_obj = Path(self.file_dup_img_src.name) # Using pathlib to extract stem/suffix
+        renamed_file_name = f"{source_file_path_obj.stem}(1){source_file_path_obj.suffix}"
+        expected_renamed_dest_path_str = f"{str(dest_images_folder_mock)}/{renamed_file_name}"
+
+        mock_shutil_move.assert_called_once_with(str(self.file_dup_img_src), expected_renamed_dest_path_str)
+
+        # The destination folder named "Images" must be created
+        dest_images_folder_mock.mkdir.assert_called_once_with(parents=True, exist_ok=True)
+
+        self.assertEqual(organizer.files_successfully_moved_or_renamed, 1) # One file moved (renamed)
+        self.assertEqual(organizer.skipped_identical_duplicates, 0)
+
+        log_output_str = "\n".join(log_context.output)
+        self.assertIn(f"File '{self.file_dup_img_src.name}' exists at '{str(dest_images_folder_mock)}' but with different content (hashes differ). Renaming source before move.", log_output_str)
+        self.assertIn(f"Moving (renamed) '{self.file_dup_img_src.name}' to '{expected_renamed_dest_path_str}'", log_output_str)
+        self.assertIn(f"Successfully moved '{self.file_dup_img_src.name}' to '{expected_renamed_dest_path_str}'", log_output_str)
+
+        mock_save_config.assert_called_once()
