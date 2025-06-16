@@ -368,3 +368,87 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
         self.assertIn(f"Successfully moved '{self.file_dup_img_src.name}' to '{expected_renamed_dest_path_str}'", log_output_str)
 
         mock_save_config.assert_called_once()
+    
+
+    @patch('organizer.shutil.move')
+    @patch('builtins.input', return_value='') # Ignore new extensions
+    @patch.object(FileOrganizer, '_interactive_edit_existing_mappings')
+    def test_dry_run_simulates_actions_and_logs_correctly(
+        self,
+        mock_interactive_edit: MagicMock,
+        mock_input: MagicMock,
+        mock_shutil_move: MagicMock
+    ):
+        """
+        Tests that in dry_run mode:
+        - No files are actually moved.
+        _ Appropriate "[DRY RUN]" log messages are generated for simulated actions,
+        including moving new files and handling pre-existing files (simulated).
+        """
+        # 1. Configuring FileOrganizer for dry_run=True
+        mock_config_path = MagicMock(spec=Path, name="MockConfigPathDryRunLogic")
+        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path), \
+            patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
+            organizer = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=True) # IMPORTANT: dry_run=True
+            organizer.session_extension_map = DEFAULT_EXTENSION_MAP.copy()
+        
+        # 2. Configuring source and destination file scenarios
+        # - A file that would normally be moved (file_pdf1)
+        # - A file that already exists in the destination (file_dup_txt_src) to simulate hash comparison
+        # - A file that has no extension (file_no_ext) to be ignored
+        # File that already exists in the destination (to simulate "already exists" logic)
+        dest_textfiles_folder_mock = self.category_folder_mocks["TextFiles"]
+        self._configure_destination_file_mock(
+            dest_category_folder_mock=dest_textfiles_folder_mock,
+            file_name=self.file_dup_txt_src.name, # readme_dup.txt
+            exists=True, # Simulates it already exists
+            content_hash="hash_does_not_matter_for_dry_run_exists_check" # Hash is not compared in dry run if it only checks for existence
+        )
+
+        # List of files that rglob will return:
+        # self.file_pdf1 -> should log "Would move"
+        # self.file_dup_txt_src -> should log "File ... already exists ... Would compare hashes"
+        # self.file_no_ext -> should log "Ignoring file"
+        self.mock_source_dir.rglob.return_value = [
+            self.file_pdf1,
+            self.file_dup_txt_src,
+            self.file_no_ext
+        ]
+
+        # The _move_file_with_deduplication method in dry_run just logs, it doesn't call _calculate_file_hash.
+        # So this patch is more to make sure that if it were called, it wouldn't break.
+        with patch.object(organizer, '_calculate_file_hash', side_effect=self._mock_calculate_hash_side_effect):
+            with self.assertLogs(self.logger, level='DEBUG') as log_context:
+                organizer.organize()
+        
+        # 4. Assertions:
+        mock_interactive_edit.assert_called_once()
+        mock_shutil_move.assert_not_called() # No file should be moved in dry run
+
+        self.assertEqual(organizer.files_successfully_moved_or_renamed, 0)
+        self.assertEqual(organizer.skipped_identical_duplicates, 0)
+
+        log_output_str = "\n".join(log_context.output)
+
+        # Checks logs for file_pdf1 (should be moved)
+        expected_dest_pdf_folder = self.category_folder_mocks["Documents"]
+        expected_full_dest_path_pdf = f"{str(expected_dest_pdf_folder)}/{self.file_pdf1.name}"
+        self.assertIn(f"[DRY RUN] Would move '{self.file_pdf1.name}' to '{expected_full_dest_path_pdf}'", log_output_str)
+
+        dest_textfiles_folder_mock = self.category_folder_mocks["TextFiles"]
+
+        # Checks logs for file_dup_txt_src (already exists at the destination)
+        self.assertIn(f"[DRY RUN] File '{self.file_dup_txt_src.name}' already exists at '{str(dest_textfiles_folder_mock)}'. Would compare hashes", log_output_str)
+
+        # Check logs for file_no_ext (ignored) - DEBUG log
+        # Since we capture both INFO and DEBUG (by changing the logger level), we can check
+        self.assertIn(f"Ignoring file '{self.file_no_ext.name}' (reason: no extension)", log_output_str)
+
+        # Checks the summary log
+        self.assertIn("--- Dry run finished. ---", log_output_str)
+        self.assertIn("Total files scanned (during organization pass): 3", log_output_str) # file_no_ext
+        self.assertIn("Files that would be considered for moving/renaming: 2", log_output_str) # pdf, dup_txt
+        self.assertIn("In dry run, duplicate checks and renaming are simulated and logged per file.", log_output_str)
+
+        self.assertIn("No changes made to extension mappings this session. Nothing to save.", log_output_str)
+        
