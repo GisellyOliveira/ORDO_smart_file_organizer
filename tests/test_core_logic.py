@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock, call
 from pathlib import Path
+import shutil
 
 from .base_test import BaseOrganizerTest
 from organizer import FileOrganizer, DEFAULT_EXTENSION_MAP
@@ -451,4 +452,60 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
         self.assertIn("In dry run, duplicate checks and renaming are simulated and logged per file.", log_output_str)
 
         self.assertIn("No changes made to extension mappings this session. Nothing to save.", log_output_str)
+    
+
+    @patch('organizer.shutil.move', side_effect=shutil.Error("Simulated Shutil Disk Full Error"))
+    @patch('builtins.input', return_value='')
+    @patch.object(FileOrganizer, '_interactive_edit_existing_mappings')
+    @patch.object(FileOrganizer, '_save_extension_map_config')
+    def test_shutil_move_error_handling(
+        self,
+        mock_save_config: MagicMock,
+        mock_interactive_edit: MagicMock,
+        mock_input: MagicMock,
+        mock_shutil_move_with_error: MagicMock
+    ):
+        """
+        Tests that FileOrganizer correctly handles an error (e.g., shutil.Error)
+        that occurs during the shutil.move operation.
+        The error should be logged, and the file not counted as moved.
+        """
+        # 1. Configuring FileOrganizer
+        mock_config_path = MagicMock(spec=Path, name="MockConfigPathShutilError}")
+        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path), \
+            patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
+            organizer = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=False)
+            organizer.session_extension_map = DEFAULT_EXTENSION_MAP.copy()
         
+        # 2. Sets the source file for this test (a file that would normally be moved)
+        # self.file_pdf1 from BaseOrganizerTest
+        self.mock_source_dir.rglob.return_value = [self.file_pdf1]
+
+        # 3. The destination does not need to exist, the error will occur on 'move'
+        # _calculate_file_hash will be called, so it needs to be mocked.
+
+        # 4. Run organize and capture ERROR logs
+        with patch.object(organizer, '_calculate_file_hash', side_effect=self._mock_calculate_hash_side_effect):
+            # The shutil error is caught and logged as ERROR by _move_file_with_deduplication
+            with self.assertLogs(self.logger, level='ERROR') as log_context:
+                organizer.organize()
+        
+        # 5. Assertions:
+        mock_interactive_edit.assert_called_once()
+
+        # Checks if shutil.move was called (even if it raised an error)
+        expected_dest_folder_mock = self.category_folder_mocks["Documents"]
+        expected_dest_path_str = f"{str(expected_dest_folder_mock)}/{self.file_pdf1.name}"
+        mock_shutil_move_with_error.assert_called_once_with(str(self.file_pdf1), expected_dest_path_str)
+
+        expected_dest_folder_mock.mkdir.assert_called_once_with(parents=True, exist_ok=True)
+
+        self.assertEqual(organizer.files_successfully_moved_or_renamed, 0) # it wasn't successfully moved
+        self.assertEqual(organizer.skipped_identical_duplicates, 0)
+
+        log_output_str = "\n".join(log_context.output)
+
+        self.assertIn(f"Shutil Error moving file '{self.file_pdf1.name}' to '{expected_dest_path_str}'", log_output_str)
+        self.assertIn("Simulated Shutil Disk Full Error", log_output_str)
+
+        mock_save_config.assert_called_once()
