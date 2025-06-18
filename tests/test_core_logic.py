@@ -578,9 +578,62 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
         self.assertIn(f"Skipping '{self.file_pdf1.name}' due to error calculating its hash", log_output_str)
 
         mock_save_config.assert_called_once()
+    
 
+    @patch('organizer.shutil.move')
+    @patch('builtins.input', return_value='')
+    @patch.object(FileOrganizer, '_interactive_edit_existing_mappings')
+    @patch.object(FileOrganizer, '_save_extension_map_config')
+    def test_destination_hash_error_skips_file(
+        self,
+        mock_save_config: MagicMock,
+        mock_interactive_edit: MagicMock,
+        mock_input: MagicMock,
+        mock_shutil_move: MagicMock
+    ):
+        """ 
+        Tests that if a filename conflict exists and hash calculation for the
+        existing DESTINATION file fails, the source file is skipped and an error logged.
+        """
+        # 1. Setting FileOrganizer
+        mock_config_path = MagicMock(spec=Path, name="MockConfigPathDestHashError")
+        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path), \
+            patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
+            organizer = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=False)
+            organizer.session_extension_map = DEFAULT_EXTENSION_MAP.copy()
+        
+        # 2. Defining the source file (with valid hash), using self.file_pdf1
+        self.file_pdf1.mocked_content_hash = "valid_source_hash_for_pdf1"
+        self.mock_source_dir.rglob.return_value = [self.file_pdf1]
 
+        # 3. Simulating that a file with the same name already exists
+        dest_documents_folder_mock = self.category_folder_mocks["Documents"]
+        # Important: Configure this destination mock so that _calculate_file_hash returns None for it.
+        # The _configure_destination_file_mock helper already allows you to pass a content_hash.
+        mock_existing_dest_file = self._configure_destination_file_mock(
+            dest_category_folder_mock=dest_documents_folder_mock,
+            file_name=self.file_pdf1.name, # Same name
+            exists=True,
+            content_hash=None # Simulates a fail at destination hash
+        )
 
+        # 4. Running organize and capture ERROR logs
+        with patch.object(organizer, '_calculate_file_hash', side_effect=self._mock_calculate_hash_side_effect) as mock_calc_hash:
+            with self.assertLogs(self.logger, level='ERROR') as log_context:
+                organizer.organize()
+        
+        # 5. Assertions:
+        mock_interactive_edit.assert_called_once()
+        mock_shutil_move.assert_not_called()
 
+        calls = [call(self.file_pdf1), call(mock_existing_dest_file)]
+        mock_calc_hash.assert_has_calls(calls, any_order=True)
 
+        self.assertEqual(organizer.files_successfully_moved_or_renamed, 0)
+        self.assertEqual(organizer.skipped_identical_duplicates, 0)
 
+        log_output_str = "\n".join(log_context.output)
+
+        self.assertIn(f"Skipping '{self.file_pdf1.name}'. Could not calculate hash for existing destination file '{mock_existing_dest_file.name}'.", log_output_str)
+
+        mock_save_config.assert_called_once()
