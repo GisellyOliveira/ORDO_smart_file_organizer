@@ -212,13 +212,14 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
         mock_shutil_move: MagicMock
     ):
         """ 
-        Tests that a file with an unmapped extension is ignored and not moved.
+        Tests that a file with an unmapped extension is ignored and not moved,
+        verifying the full interactive log flow.
         """
         # 1. Configuring FileOrganizer
         mock_config_path = MagicMock(spec=Path, name="MockConfigPathUnmappedExt")
 
-        # Using a session map that DEFINITELY does not have '.dat'
-        # The DEFAULT_EXTENSION_MAP no longer does, but to be explicit:
+        # Using a session map that DEFINITELY has not received a '.dat' file
+        # '.dat' is no longer present in the DEFAULT_EXTENSION_MAP, but for clarity:
         current_test_map = DEFAULT_EXTENSION_MAP.copy()
         if '.dat' in current_test_map: # If the pattern changes in the future
             del current_test_map['.dat']
@@ -242,7 +243,17 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
         self.assertEqual(organizer.files_successfully_moved_or_renamed, 0)
         self.assertEqual(organizer.skipped_identical_duplicates, 0)
 
-        self.assertIn(f"Ignoring file '{self.file_unmapped_ext.name}' (reason: extension '{self.file_unmapped_ext.suffix}' not in current session's extension map)", "\n".join(log_context.output))
+        # Check which logs are actually emitted
+        mock_input.assert_called_once()
+
+        # Check the complete log sequence for the unmapped extension
+        log_output_str = "\n".join(log_context.output)
+
+        # Check if the ignore decision (based on input='') was logged (INFO level)
+        self.assertIn(f"Extension '{self.file_unmapped_ext.suffix}' will be IGNORED for this session.", log_output_str)
+
+        # Check if the final ignore decision in the "Actual Organization Pass" was logged (DEBUG level)
+        self.assertIn(f"Ignoring file '{self.file_unmapped_ext.name}' (reason: extension '{self.file_unmapped_ext.suffix}' not in current session's extension map).", log_output_str)
 
         mock_save_config.assert_called_once()
     
@@ -637,3 +648,94 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
         self.assertIn(f"Skipping '{self.file_pdf1.name}'. Could not calculate hash for existing destination file '{mock_existing_dest_file.name}'.", log_output_str)
 
         mock_save_config.assert_called_once()
+    
+
+    @patch('organizer.shutil.move')
+    @patch('builtins.input', return_value='')
+    @patch.object(FileExistsError, '_interactive_edit_existing_mappings')
+    @patch.object(FileOrganizer, '_save_extension_map_config')
+    def test_organize_processes_multiple_files_correctly(
+        self,
+        mock_save_config: MagicMock,
+        mock_interactive_edit: MagicMock,
+        mock_input: MagicMock,
+        mock_shutil_move: MagicMock
+    ):
+        """ 
+        Tests the core organization logic with a batch of various files:
+        - Files with mapped extension are moved.
+        - Files without extensions or with unmapped extensions (after interactive skip) are ignored.
+        - Destination category folders are created as needed.
+        - Assumes no pre-existing conflicting files in the destination for this specific test.
+        """
+        # 1. Setting FileOrganizer
+        mock_config_path = MagicMock(spec=Path, name="MockConfigPathOrganizeBatch")
+        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path), \
+            patch.object(FileOrganizer, '_load_extension_mao_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
+            organizer = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=False)
+            # Ensures that the session map is the default and will not be changed by mocked interactivity
+            organizer.session_extension_map = DEFAULT_EXTENSION_MAP.copy()
+
+        # 2. Setting rglob to return all sample files from setUp
+        # self.all_source_files_for_setup includes mapped, unmapped, and files with no extension.
+        self.mock_source_dir.rglob.return_value = self.all_source_files_for_setup
+
+        # 3. Mocking _calculate_file_hash and running organize
+        with patch.object(organizer, '_calculate_file_hash', side_effect=self._mock_calculate_hash_side_effect) :
+            with self.assertLogs(self.logger, level='DEBUG') as log_context:
+                organizer.organize()
+
+        # 4. Assertions
+        mock_interactive_edit.assert_called_once()
+
+        # --- Checking files that should be moved ---
+        expected_moves = [
+            (self.file_pdf1, "Documents"), (self.file_docx1, "Documents"),
+            (self.file_epub1, "Ebooks"), (self.file_xlsx1, "Spreadsheets"),
+            (self.file_csv1, "Data"), (self.file_jpg1, "Images"), 
+            (self.file_png1, "Images"), (self.file_svg1, "VectorGraphics"),
+            (self.file_psd1, "Design_Files"), (self.file_zip1, "Archives"),
+            (self.file_exe1, "Executables_Installers"), (self.file_mp3_1, "Music"),
+            (self.file_wav1, "Audio"), (self.file_mp4_1, "Videos"),
+            (self.file_log1, "LogFiles"), (self.file_json1, "Data"), 
+            (self.file_yaml1, "Configs"), (self.file_ttf1, "Fonts"),
+            (self.file_dup_txt_src, "TextFiles"), 
+            (self.file_dup_img_src, "Images"),  
+        ]
+
+        actual_move_calls = []
+        for source_file_mock, category_name in expected_moves:
+            dest_folder_mock = self.category_folder_mocks[category_name]
+            expected_dest_path = f"{str(dest_folder_mock)}/{source_file_mock.name}"
+            actual_move_calls.append(call(str(source_file_mock), expected_dest_path))
+            # Checking if each category folder was called
+            dest_folder_mock.mkdir.assert_any_call(parents=True, exist_ok=True)
+
+            self.assertEqual(mock_shutil_move.call_count, len(expected_moves))
+            mock_shutil_move.assert_has_calls(actual_move_calls, any_order=True)
+
+            # Checking counters
+            self.assertEqual(organizer.files_successfully_moved_or_renamed, len(expected_moves))
+            self.assertEqual(organizer.skipped_identical_duplicates, 0)
+
+            # ---Checking logs for ignored files---
+            log_output_str = "\n".join(log_context.output)
+            self.assertIn(f"Ignoring file '{self.file_no_ext.name}' (reason: no extension)", log_output_str)
+
+            # For file_unmapped_ext (.dat), since mock_input returns '', it will be ignored in the "new extents" phase
+            self.assertIn(f"For extension '.dat': Enter target folder name", log_output_str) # Checks if the prompt occurred
+            self.assertIn(f"Extension '.dat' will be IGNORED for this session.", log_output_str) # Checks if the result input is empty
+
+            # -- Checking log summary --
+            num_total_scanned = len(self.all_source_files_for_setup)
+            num_ignored_by_rule = 2
+
+            self.assertIn(f"Total files scanned (during organization pass): {num_total_scanned}", log_output_str)
+            self.assertIn(f"Files ignored by (default or session) extension rules: {num_ignored_by_rule}", log_output_str)
+            self.assertIn(f"Files successfully moved or renamed: {len(expected_moves)}", log_output_str)
+            self.assertIn(f"Identical duplicate files skipped: 0", log_output_str)
+
+            mock_save_config.assert_called_once()
+
+            self.assertIn("No changes made to extension mappings this sessions.Nothing to save.", log_output_str)
+            
