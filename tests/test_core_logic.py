@@ -652,11 +652,11 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
 
     @patch('organizer.shutil.move')
     @patch('builtins.input', return_value='')
-    @patch.object(FileExistsError, '_interactive_edit_existing_mappings')
-    @patch.object(FileOrganizer, '_save_extension_map_config')
+    @patch.object(FileOrganizer, '_interactive_edit_existing_mappings')
+    #@patch.object(FileOrganizer, '_save_extension_map_config')
     def test_organize_processes_multiple_files_correctly(
         self,
-        mock_save_config: MagicMock,
+        #mock_save_config: MagicMock,
         mock_interactive_edit: MagicMock,
         mock_input: MagicMock,
         mock_shutil_move: MagicMock
@@ -671,7 +671,7 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
         # 1. Setting FileOrganizer
         mock_config_path = MagicMock(spec=Path, name="MockConfigPathOrganizeBatch")
         with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path), \
-            patch.object(FileOrganizer, '_load_extension_mao_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
+            patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
             organizer = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=False)
             # Ensures that the session map is the default and will not be changed by mocked interactivity
             organizer.session_extension_map = DEFAULT_EXTENSION_MAP.copy()
@@ -723,7 +723,9 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
             self.assertIn(f"Ignoring file '{self.file_no_ext.name}' (reason: no extension)", log_output_str)
 
             # For file_unmapped_ext (.dat), since mock_input returns '', it will be ignored in the "new extents" phase
-            self.assertIn(f"For extension '.dat': Enter target folder name", log_output_str) # Checks if the prompt occurred
+            expected_prompt = "For extension '.dat': Enter target folder name (e.g., MyCustomFiles) or leave blank to IGNORE: "
+            mock_input.assert_any_call(expected_prompt)
+            
             self.assertIn(f"Extension '.dat' will be IGNORED for this session.", log_output_str) # Checks if the result input is empty
 
             # -- Checking log summary --
@@ -735,7 +737,7 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
             self.assertIn(f"Files successfully moved or renamed: {len(expected_moves)}", log_output_str)
             self.assertIn(f"Identical duplicate files skipped: 0", log_output_str)
 
-            mock_save_config.assert_called_once()
+            #mock_save_config.assert_called_once()
 
-            self.assertIn("No changes made to extension mappings this sessions.Nothing to save.", log_output_str)
+            self.assertIn("No changes made to extension mappings this session. Nothing to save.", log_output_str)
             

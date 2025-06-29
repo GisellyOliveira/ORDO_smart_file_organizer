@@ -211,38 +211,51 @@ class TestConfigManagement(BaseOrganizerTest):
     @patch('organizer.user_config_dir')
     @patch('organizer.json.dump')
     def test_save_config_dry_run_logs_appropriately(self, mock_json_dump: MagicMock, mock_user_config_dir: MagicMock):
+        """
+        Tests that in dry_run mode, if changes WERE made, the save is skipped and logged.
+        """
         mock_config_path_obj = MagicMock(spec=Path)
-        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path_obj):
-            with patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
-                organizer_with_changes = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=True)
+        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path_obj), \
+            patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
+            organizer = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=True)
         
-        organizer_with_changes._map_changed_this_session = True
+        organizer._map_changed_this_session = True # It simulates there were changes in the map
 
-        # The log in _save_extension_map_config for dry_run is INFO
-        # but the initial if (if not self._map_changed_this_session and not self.dry_run:) can be True
-        # if _map_changed_this_session is False.
-        # Adjustment: the log of "Dry run: Configuration changes will not be saved." only appears if _map_changed_this_session is True.
-        # If _map_changed_this_session is False, the first if already returns.
-
-        # Test 1: Dry run, with changes -> specific log for dry_run
         with self.assertLogs(self.logger, level='INFO') as log_context:
-            organizer_with_changes._save_extension_map_config() # _map_changed_this_session is True
+            organizer._save_extension_map_config()
         
+        # Checks if the file was NOT saved and if the correct log was shown
         mock_json_dump.assert_not_called()
         self.assertIn("Dry run: Configuration changes will not be saved.", "\n".join(log_context.output))
+    
 
-        # Test 2: Dry run with NO changes -> "No changes" log
-        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path_obj):
-            with patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
-                organizer_no_changes = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=True)
-        
-        organizer_no_changes._map_changed_this_session = False
+    @patch('organizer.user_config_dir')
+    @patch('organizer.json.dump')
+    def test_save_config_in_dry_run_without_changes_logs_correctly(
+        self,
+        mock_json_dump: MagicMock,
+        mock_user_config_dir: MagicMock
+    ):
+        """ 
+        Tests that even in dry_run mode, if NO changes were made, the 'no changes' log
+        is shown, which has precedence.
+        """
+        mock_config_path_obj = MagicMock(spec=Path)
+
+        # __init__ must be mocked for error-free instantiation
+        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path_obj), \
+            patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
+            organizer = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=True)
+
+        organizer._map_changed_this_session = False 
+
         with self.assertLogs(self.logger, level='INFO') as log_context:
-            organizer_no_changes._save_extension_map_config()
+            organizer._save_extension_map_config()
         
+        # Checks that the file was NOT saved and that the "no changes" log was issued
         mock_json_dump.assert_not_called()
         self.assertIn("No changes made to extension mappings this session. Nothing to save.", "\n".join(log_context.output))
-
+            
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
