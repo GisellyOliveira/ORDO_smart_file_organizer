@@ -80,3 +80,51 @@ class TestInteractiveFlows(BaseOrganizerTest):
 
         # 5. Did the interaction with 'input' go as expected?
         self.assertEqual(mock_input.call_count, 3, "Input deveria ter sido chamado 3 vezes.")
+    
+
+    @patch('organizer.shutil.move')
+    @patch('builtins.input')
+    def test_new_unmapped_extension_is_ignored_by_user(self, mock_input: MagicMock, mock_shutil_move: MagicMock):
+        """ 
+        Scenario: Script finds '.dat' extension (not mapped).
+        User responds with an empty string (presses Enter), to ignore.
+        Checks: Map is NOT updated, file is NOT moved and no changes are recorded.
+        """
+        # --- ARRANGE ---
+        # Setting FileOrganizer
+        mock_config_path = MagicMock(spec=Path)
+        with patch.object(FileOrganizer, '_get_config_file_path', return_value=mock_config_path), \
+            patch.object(FileOrganizer, '_load_extension_map_config', return_value=DEFAULT_EXTENSION_MAP.copy()):
+            organizer = FileOrganizer(self.mock_source_dir, self.mock_dest_dir, dry_run=False)
+            organizer.session_extension_map.pop('.dat', None)
+        
+        self.mock_source_dir.rglob.return_value = [self.file_unmapped_ext]
+
+        user_responses = [
+            'n', # Reply to "Review or modify...?"
+            '' # Reply to new '.dat' extension prompt (Enter)
+        ]
+        mock_input.side_effect = user_responses
+
+        with self.assertLogs(self.logger, level='DEBUG') as log_context:
+            organizer.organize()
+        
+        # Assertions
+        # 1. The internal state of the organizer must NOT have changed.
+        self.assertFalse(organizer._map_changed_this_session, "The map change flag should be False.")
+        self.assertNotIn('.dat', organizer.session_extension_map, "The '.dat' extension should not have been added to the map.")
+
+        # 2. The script communicated the decision to ignore.
+        log_output = "\n".join(log_context.output)
+        self.assertIn("Extension '.dat' will be IGNORED for this session.", log_output)
+        self.assertIn("Ignoring file 'backup.dat' (reason: extension '.dat' not in current session's extension map).", log_output)
+
+        # 3. NO FILE should have been moved.
+        mock_shutil_move.assert_not_called()
+
+        # 4. Counters must be reset.
+        self.assertEqual(organizer.files_successfully_moved_or_renamed, 0)
+        self.assertEqual(organizer.skipped_identical_duplicates, 0)
+
+        # 5. Interaction with 'input' happened as expected.
+        self.assertEqual(mock_input.call_count, 2, "Input should have been called twice.")
