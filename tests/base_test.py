@@ -206,16 +206,16 @@ class BaseOrganizerTest(unittest.TestCase):
         if subfolder_name_str in self.category_folder_mocks:
             return self.category_folder_mocks[subfolder_name_str]
         else:
-            # This case should ideally not be hit if DEFAULT_EXTENSION_MAP is comprehensive
-            # and the FileOrganizer only tries to create folders present in its session_extension_map.
-            # Logging a warning here can help catch unexpected folder creations.
-            self.logger.warning(
-                f"Request for unexpected category folder mock: '{subfolder_name_str}'. "
-                f"This folder name was not found in DEFAULT_EXTENSION_MAP values. "
-                f"Creating a generic mock for it."
+            # This case IS expected to be hit when testing interactive mapping
+            # of new extensions. The log is still useful for debugging.
+            self.logger.info(
+                f"Dynamically creating and registering mock for new category folder: '{subfolder_name_str}'."
             )
-            # Create and return a new generic mock on the fly if absolutely necessary
-            return self._create_mock_dest_category_folder(subfolder_name_str)
+            # Create a new mock for the folder...
+            new_folder_mock = self._create_mock_dest_category_folder(subfolder_name_str)
+            # ...and REGISTER it so it becomes a "known" folder for this test run.
+            self.category_folder_mocks[subfolder_name_str] = new_folder_mock
+            return new_folder_mock
 
     def _specific_destination_file_division(self, current_dest_category_folder_mock: MagicMock, file_name_or_path_obj: any) -> MagicMock:
         """
