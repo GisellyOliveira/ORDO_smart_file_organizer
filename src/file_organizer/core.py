@@ -2,6 +2,7 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import Optional, Dict
+import shutil
 
 logger = logging.getLogger(__name__)
 
