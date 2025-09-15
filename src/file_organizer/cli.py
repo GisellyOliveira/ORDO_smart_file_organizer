@@ -2,7 +2,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-#from typing import Dict
+from typing import Dict
 
 from . import config
 from .core import FileOrganizer
@@ -16,6 +16,7 @@ def setup_logging(level: int):
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[logging.StreamHandler(sys.stdout)]
     )
+
 
 def handle_interactive_edit(current_map: Dict[str, str]) -> bool:
     """
@@ -86,6 +87,7 @@ def handle_interactive_edit(current_map: Dict[str, str]) -> bool:
     logger.info("Finished reviewing/modifying mappings.")
     return map_changed
 
+
 def handle_unmapped_extensions(source_dir: Path, current_map: Dict[str, str]) -> bool:
     """
     Discovers unmapped extensions and asks the user how to handle them.
@@ -127,45 +129,46 @@ def handle_unmapped_extensions(source_dir: Path, current_map: Dict[str, str]) ->
             
     return map_changed
 
-    def main():
-        """Main entry point of the CLI application."""
-        parser = argparse.ArgumentParser(
-            description="Organizes files from a source directory into categorized subdirectories."
-        )
-        parser.add_argument("source_dir", type=Path, help="The source directory containing files to organize.")
-        parser.add_argument("dest_dir", type=Path, help="The base destination directory for organized sub-folders.")
-        parser.add_argument("--dry-run", action="store_true", help="Simulates the organization process without moving files.")
-        parser.add_argument("-v", "--verbose", action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.INFO, help="Increase output verbosity to DEBUG level.")
-    
-        args = parser.parse_args()
-    
-        setup_logging(args.loglevel)
-    
-        try:
-            # 1. Loads the initial configuration
-            extension_map = config.load_extension_map()
-        
-            # 2. Runs the interactive flows to refine the map
-            #map_changed_by_edit = handle_interactive_edit(extension_map)
-            #map_changed_by_new = handle_unmapped_extensions(args.source_dir, extension_map)
-            #map_was_changed = map_changed_by_edit or map_changed_by_new
 
-            # 3. Initializes the 'worker' and runs the main logic
-            organizer = FileOrganizer(args.source_dir, args.dest_dir)
-            organizer.organize(extension_map, args.dry_run)
+def main():
+    """Main entry point of the CLI application."""
+    parser = argparse.ArgumentParser(
+        description="Organizes files from a source directory into categorized subdirectories."
+    )
+    parser.add_argument("source_dir", type=Path, help="The source directory containing files to organize.")
+    parser.add_argument("dest_dir", type=Path, help="The base destination directory for organized sub-folders.")
+    parser.add_argument("--dry-run", action="store_true", help="Simulates the organization process without moving files.")
+    parser.add_argument("-v", "--verbose", action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.INFO, help="Increase output verbosity to DEBUG level.")
 
-            # 4. Saves the configuration if it changed and if the user confirms
-            #if map_was_changed and not args.dry_run:
-                #try:
-                    #save_choice = input("Save these new/updated mappings for future use? (y/N): ").strip().lower()
-                    #if save_choice.startswith('y'):
-                        #config.save_extension_map(extension_map)
-                #except EOFError:
-                    #logger.warning("Input stream closed (EOF). Configuration not saved.")
+    args = parser.parse_args()
 
-        except (ValueError, FileNotFoundError) as e:
-            logger.critical(f"Configuration Error: {e}")
-            sys.exit(1)
-        except Exception as e:
-            logger.critical(f"An unexpected critical error occurred: {e}", exc_info=True)
-            sys.exit(1)
+    setup_logging(args.loglevel)
+
+    try:
+        # 1. Loads the initial configuration
+        extension_map = config.load_extension_map()
+
+        # 2. Runs the interactive flows to refine the map
+        map_changed_by_edit = handle_interactive_edit(extension_map)
+        map_changed_by_new = handle_unmapped_extensions(args.source_dir, extension_map)
+        map_was_changed = map_changed_by_edit or map_changed_by_new
+
+        # 3. Initializes the 'worker' and runs the main logic
+        organizer = FileOrganizer(args.source_dir, args.dest_dir)
+        organizer.organize(extension_map, args.dry_run)
+
+        # 4. Saves the configuration if it changed and if the user confirms
+        if map_was_changed and not args.dry_run:
+            try:
+                save_choice = input("Save these new/updated mappings for future use? (y/N): ").strip().lower()
+                if save_choice.startswith('y'):
+                    config.save_extension_map(extension_map)
+            except EOFError:
+                logger.warning("Input stream closed (EOF). Configuration not saved.")
+
+    except (ValueError, FileNotFoundError) as e:
+        logger.critical(f"Configuration Error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.critical(f"An unexpected critical error occurred: {e}", exc_info=True)
+        sys.exit(1)
