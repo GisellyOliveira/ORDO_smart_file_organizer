@@ -9,8 +9,9 @@ from .core import FileOrganizer
 
 logger = logging.getLogger(__name__)
 
+
 def setup_logging(level: int):
-    """Sets up basic logging for the application."""
+    """Configures the application's root logger."""
     logging.basicConfig(
         level=level,
         format='%(asctime)s - %(levelname)s - %(message)s',
@@ -20,9 +21,14 @@ def setup_logging(level: int):
 
 def handle_interactive_edit(current_map: Dict[str, str]) -> bool:
     """
-    Handles the interactive editing flow of existing mappings.
-    Modifies the `current_map` dictionary directly.
-    Returns True if any changes were made.
+    Guides the user through an interactive session to review and modify
+    existing extension mappings.
+
+    Args:
+        current_map: The extension map dictionary to be modified in-place.
+
+    Returns:
+        True if any changes were made to the map, False otherwise.
     """
     try:
         review_choice = input("Review or modify current extension mappings? (yes/No, default: No): ").strip().lower()
@@ -90,9 +96,15 @@ def handle_interactive_edit(current_map: Dict[str, str]) -> bool:
 
 def handle_unmapped_extensions(source_dir: Path, current_map: Dict[str, str]) -> bool:
     """
-    Discovers unmapped extensions and asks the user how to handle them.
-    Modifies the `current_map` dictionary directly.
-    Returns True if any changes were made.
+    Discovers unmapped extensions in the source directory and prompts the
+    user for how to categorize them.
+
+    Args:
+        source_dir: The source directory to scan for files.
+        current_map: The extension map dictionary to be modified in-place.
+
+    Returns:
+        True if any new mappings were added, False otherwise.
     """
     logger.info("Scanning for unmapped extensions...")
     found_extensions = {p.suffix.lower() for p in source_dir.rglob('*') if p.is_file() and p.suffix}
@@ -114,7 +126,8 @@ def handle_unmapped_extensions(source_dir: Path, current_map: Dict[str, str]) ->
             if not folder_name:
                 logger.info(f"Extension '{ext}' will be ignored for this session.")
                 continue
-
+            
+            # Basic validation for folder names to prevent common errors.
             invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
             if any(char in folder_name for char in invalid_chars) or folder_name.startswith('.') or folder_name.endswith('.'):
                 logger.warning(f"Invalid folder name: '{folder_name}'. Skipping this extension.")
@@ -131,7 +144,9 @@ def handle_unmapped_extensions(source_dir: Path, current_map: Dict[str, str]) ->
 
 
 def main():
-    """Main entry point of the CLI application."""
+    """
+    Parses command-line arguments and orchestrates the file organization process.
+    """
     parser = argparse.ArgumentParser(
         description="Organizes files from a source directory into categorized subdirectories."
     )
@@ -145,19 +160,16 @@ def main():
     setup_logging(args.loglevel)
 
     try:
-        # 1. Loads the initial configuration
+        # The main application workflow is a clear, sequential process.
         extension_map = config.load_extension_map()
 
-        # 2. Runs the interactive flows to refine the map
         map_changed_by_edit = handle_interactive_edit(extension_map)
         map_changed_by_new = handle_unmapped_extensions(args.source_dir, extension_map)
         map_was_changed = map_changed_by_edit or map_changed_by_new
 
-        # 3. Initializes the 'worker' and runs the main logic
         organizer = FileOrganizer(args.source_dir, args.dest_dir)
         organizer.organize(extension_map, args.dry_run)
 
-        # 4. Saves the configuration if it changed and if the user confirms
         if map_was_changed and not args.dry_run:
             try:
                 save_choice = input("Save these new/updated mappings for future use? (y/N): ").strip().lower()

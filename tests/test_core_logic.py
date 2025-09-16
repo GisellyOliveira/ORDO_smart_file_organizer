@@ -147,10 +147,9 @@ class TestCoreLogicAndInitialization(BaseOrganizerTest):
                 organizer.organize(self.test_extension_map, dry_run=True)
         
         mock_shutil_move.assert_not_called()
-        self.assertEqual(organizer.files_moved, 2) # Both are counted as processed 
+        self.assertEqual(organizer.files_moved, 2) # Both should be counted as processed 
         self.assertEqual(organizer.files_skipped, 0)
 
         log_output = "\n".join(log_context.output)
-        self.assertIn(f"[DRY RUN] Would move '{self.file_pdf1.name}'", log_output)
-        self.assertIn(f"[DRY RUN] Would move '{self.file_dup_img_src.name}'", log_output)
-        self.assertIn("(renamed)", log_output)
+        self.assertIn(f"[DRY RUN] File '{self.file_pdf1.name}' would be moved to", log_output)
+        self.assertIn(f"[DRY RUN] File '{self.file_dup_img_src.name}' would be renamed to", log_output)
