@@ -1,6 +1,24 @@
-.env
+# Python artifacts
 __pycache__/
+*.py[cod]
+*$py.class
+
+# Test artifacts
+.pytest_cache/
+
+# Build artfacts
+*.egg-info/
+dist/
+build/
+
+# Virtual enviroment
+.env
+
+# Log and output files
 *.log
 output.txt
-.json
-*.egg-info/
+log_de_erro.txt
+
+# Editor/OS specific
+.DS_Store
+.vscode/
