@@ -1,10 +1,46 @@
 import hashlib
 import logging
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Callable
 import shutil
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+
+def scan_folder_for_extensions(source_dir: Path) -> Dict:
+    """
+    Scans a directory recursively and returns a summary of file extensions.
+
+    Args:
+        source_dir: the directory to scan.
+    
+    Returns:
+        A dictionary containing a list of unique extensions, a count for
+        each extension, and the total number of files found.
+        Example:
+        {
+            "extensions": [".jpg", ".pdf"],
+            "file_counts": {".jpg": 45, ".pdf": 12},
+            "total_files": 57
+        }
+    """
+    extension_counts = defaultdict(int)
+
+    if not source_dir.is_dir():
+        return {"extensions": [], "file_counts": {}, "total_files": 0}
+    
+    for file_path in source_dir.rglob('*'):
+        if file_path.is_file() and file_path.suffix:
+            extension_counts[file_path.suffix.lower()] += 1
+
+    total_files = sum(extension_counts.values())
+
+    return {
+        "extensions": sorted(list(extension_counts.keys())),
+        "file_counts": dict(extension_counts),
+        "total_files": total_files 
+    }
+
 
 class FileOrganizer:
     """ 
@@ -40,7 +76,11 @@ class FileOrganizer:
 
         logger.info(f"Core organizer initialized. Source: '{self.source_dir}', Destination: '{self.dest_dir}'")
     
-    def organize(self, extension_map: Dict[str, str], dry_run: bool = False) -> None:
+    def organize(
+            self, 
+            extension_map: Dict[str, str], 
+            dry_run: bool = False,
+            progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
         """
         Executes the main file organization workflow.
 
@@ -48,23 +88,28 @@ class FileOrganizer:
         according to the provided extension map and dry-run flag.
 
         Args:
-            extension_map: A dictionary mapping file extensions (e.g., '.pdf')
-                           to destination folder names (e.g., 'Documents').
-            dry_run: If True, simulates all operations without making changes
-                     to the filesystem.
+            extension_map: A dictionary mapping file extensions to folder names.
+            dry_run: If True, simulates all operations without filesystem changes.
+            progress_callback: An optional function to call with progress updates.
+                               It receives (processed_count, total_count).
         """
         logger.info("Starting file organization process...")
         # Reset counters for this run to ensure the instance is reusable.
         self.files_moved = 0
         self.files_skipped = 0
         
-        total_scanned = 0
-        for item_path in self.source_dir.rglob('*'):
-            if item_path.is_file():
-                total_scanned += 1
-                self._process_file(item_path, extension_map, dry_run)
+        files_to_process = [
+            f for f in self.source_dir.rglob('*')
+            if f.is_file() and f.suffix.lower() in extension_map
+        ]
+        total_files = len(files_to_process)
+
+        for i, item_path in enumerate(files_to_process):
+            self._process_file(item_path, extension_map, dry_run)
+            if progress_callback:
+                progress_callback(i + 1, total_files)
         
-        self._log_summary(total_scanned, dry_run)
+        self._log_summary(len(files_to_process), dry_run)
     
     def _process_file(self, file_path: Path, extension_map: Dict[str, str], dry_run: bool) -> None:
         """Determines the destination for a single file and initiates the move."""
@@ -78,7 +123,7 @@ class FileOrganizer:
 
         self._move_file_with_deduplication(file_path, destination_category_folder, dry_run)
     
-    def _move_file_with_deduplication(self, source_path: Path, dest_folder: Path, dry_run: bool):
+    def _move_file_with_deduplication(self, source_path: Path, dest_folder: Path, dry_run: bool) -> None:
         """
         Moves a file, handling potential duplicates by content hashing.
 

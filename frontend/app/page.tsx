@@ -1,8 +1,8 @@
-import { FileOrganizerInterface } from "@/components/file-organizer-interface"
+import { FileOrganizerInterface } from '@/components/file-organizer-interface'
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-background">
+    <main className="bg-background min-h-screen">
       <FileOrganizerInterface />
     </main>
   )
